@@ -1,0 +1,86 @@
+// App/parking_service.go
+package application
+
+import (
+	"fmt"
+	application "simulador/App"
+	domain "simulador/Domain"
+	"sync"
+	"time"
+
+	"golang.org/x/exp/rand"
+)
+
+// ... (UpdateInfo y ParkingService sin cambios)
+
+func NewParkingService(capacity int) *ParkingService {
+	spots := make([]int, capacity)
+	return &ParkingService{
+		Parking:       domain.Parking{Capacity: capacity, Spots: spots},
+		EntryChannel:  make(chan domain.Car),
+		ExitChannel:   make(chan domain.Car),
+		UpdateChannel: make(chan UpdateInfo),
+		DoorMutex:     sync.Mutex{},          // Inicializar el mutex de la puerta
+		entryQueue:    make([]domain.Car, 0), // Cola de entrada
+	}
+}
+
+func (ps *ParkingService) EnterParking(vehicle domain.Car) {
+	ps.Mutex.Lock()
+	if ps.Parking.Vehicles < ps.Parking.Capacity {
+		ps.entryQueue = append(ps.entryQueue, vehicle) // Agregar vehículo a la cola
+		ps.Mutex.Unlock()
+		ps.tryEnter() // Intentar entrar (controlado por el mutex de la puerta y la cola)
+	} else {
+		vehicle.State = "Blocked (No Space)"
+		ps.UpdateChannel <- UpdateInfo{Car: vehicle, Entering: false, Spot: -1}
+		ps.Mutex.Unlock()
+	}
+
+}
+
+
+
+func (ps *ParkingService) ExitParking(vehicle domain.Car) {
+	ps.DoorMutex.Lock()         // Bloquear la puerta antes de salir
+	defer ps.DoorMutex.Unlock() // Desbloquear al salir
+
+	ps.Mutex.Lock()
+	defer ps.Mutex.Unlock()
+
+	ps.Parking.Vehicles--
+	vehicle.State = "Exiting"
+	ps.UpdateChannel <- UpdateInfo{Car: vehicle, Entering: false, Spot: -1}
+	ps.freeSpot(vehicle.Spot)
+
+	ps.tryEnter() // Intentar que los vehículos en cola entren
+}
+
+// ... (findAvailableSpot y freeSpot sin cambios)
+
+// En infrastructure/parking_control.go:
+
+func StartParkingControl(service *application.ParkingService, numVehicles int, done chan bool) {
+	var wg sync.WaitGroup
+	wg.Add(numVehicles)
+
+	go func() {
+		for {
+			select {
+			case vehicle := <-service.EntryChannel:
+				go service.EnterParking(vehicle)
+			case vehicle := <-service.ExitChannel:
+				go func(v domain.Car) {
+					service.ExitParking(v)
+					wg.Done()
+				}(vehicle)
+
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(service.UpdateChannel) // Cerrar el canal después de que todos los vehículos hayan salido
+	fmt.Println("Todos los vehículos han salido.")
+	done <- true // Indicar que la simulación ha terminado
+}
