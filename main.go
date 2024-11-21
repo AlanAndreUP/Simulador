@@ -1,20 +1,27 @@
 package main
 
 import (
+	"fmt"
 	application "simulador/App"
 	infrastructure "simulador/Infrestructure"
 	ui "simulador/UI"
+	"time"
 )
 
 func main() {
 	numVehicles := 100
+	timeout := 10 * time.Second
+	parkingLotService := application.NewParkingLotService(20, timeout)
+	parkingUI := ui.NewParkingUI(parkingLotService)
+	parkingLotService.RegisterObserver(parkingUI)
 
-	parkingService := application.NewParkingService(20)
+	if parkingLotService == nil {
+		fmt.Println("Error: parkingService es nil")
+		return
+	}
 
-	done := make(chan bool)
-	go infrastructure.StartParkingControl(parkingService, numVehicles)
-	go infrastructure.GenerateVehicles(parkingService.EntryChannel, numVehicles)
-	ui.StartUI(parkingService)
+	go infrastructure.StartParkingControl(parkingLotService, numVehicles)
+	//go infrastructure.GenerateVehicles(parkingService.GetEntryChannel(), numVehicles)
 
-	<-done
+	ui.StartUI(parkingLotService)
 }

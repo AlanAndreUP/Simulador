@@ -1,4 +1,4 @@
-package application
+package parking
 
 import (
 	"fmt"
@@ -9,181 +9,216 @@ import (
 	"golang.org/x/exp/rand"
 )
 
+type Observer interface {
+	Update(info UpdateInfo)
+}
+
 type UpdateInfo struct {
-	Car      domain.Car
-	Entering bool
-	Spot     int
+	Car       *domain.Car
+	Entering  bool
+	Spot      int
+	EventType string
 }
 
-type ParkingService struct {
-	Parking       domain.Parking
-	EntryChannel  chan domain.Car
-	ExitChannel   chan domain.Car
-	UpdateChannel chan UpdateInfo
-	entryQueue    []domain.Car
-	spotAvailable sync.Cond
-	queueMutex    sync.Mutex
+type ParkingLotService struct {
+	ParkingLot      *domain.ParkingLot
+	entryChannel    chan *domain.Car
+	exitChannel     chan *domain.Car
+	entryQueue      []*domain.Car
+	spotAvailable   *sync.Cond
+	queueMutex      sync.Mutex
+	UpdateChannel   chan UpdateInfo
+	timeoutDuration time.Duration
+	observers       []Observer
+	observerMutex   sync.Mutex
 }
 
-func NewParkingService(capacity int) *ParkingService {
+func NewParkingLotService(capacity int, timeout time.Duration) *ParkingLotService {
 	spots := make([]int, capacity)
-	ps := &ParkingService{
-		Parking:       domain.Parking{Capacity: capacity, Spots: spots},
-		EntryChannel:  make(chan domain.Car),
-		ExitChannel:   make(chan domain.Car),
-		UpdateChannel: make(chan UpdateInfo),
-		entryQueue:    make([]domain.Car, 0),
+	parkingLot := &domain.ParkingLot{Capacity: capacity, Spots: spots}
+	ps := &ParkingLotService{
+		ParkingLot:      parkingLot,
+		entryChannel:    make(chan *domain.Car),
+		exitChannel:     make(chan *domain.Car),
+		entryQueue:      make([]*domain.Car, 20),
+		timeoutDuration: timeout,
+		UpdateChannel:   make(chan UpdateInfo),
 	}
-	ps.spotAvailable.L = &sync.Mutex{}
+	ps.spotAvailable = sync.NewCond(&sync.Mutex{})
 	return ps
 }
 
-func (ps *ParkingService) EnterParking(vehicle domain.Car) {
-	ps.spotAvailable.L.Lock()
-	defer ps.spotAvailable.L.Unlock()
+func (ps *ParkingLotService) RegisterObserver(o Observer) {
+	ps.observerMutex.Lock()
+	defer ps.observerMutex.Unlock()
+	ps.observers = append(ps.observers, o)
+}
 
-	if ps.Parking.Vehicles < ps.Parking.Capacity {
-		ps.assignSpotAndEnter(vehicle)
-	} else {
-		ps.queueMutex.Lock()
-		ps.entryQueue = append(ps.entryQueue, vehicle)
-		ps.queueMutex.Unlock()
-		fmt.Printf("Estacionamiento lleno. Carro %d en espera.\n", vehicle.ID)
-
-		ps.waitForSpot(vehicle)
+func (ps *ParkingLotService) RemoveObserver(o Observer) {
+	ps.observerMutex.Lock()
+	defer ps.observerMutex.Unlock()
+	for i, observer := range ps.observers {
+		if observer == o {
+			ps.observers = append(ps.observers[:i], ps.observers[i+1:]...)
+			break
+		}
 	}
 }
 
-func (ps *ParkingService) waitForSpot(vehicle domain.Car) {
+func (ps *ParkingLotService) notifyObservers(info UpdateInfo) {
+	fmt.Printf("Notificando: Car %d - Estado: %s, Spot: %d, Tipo de Evento: %s\n", info.Car.ID, info.Spot, info.Car.Spot, info.EventType)
+
+	ps.observerMutex.Lock()
+	defer ps.observerMutex.Unlock()
+	for _, observer := range ps.observers {
+		go observer.Update(info)
+	}
+}
+
+func (ps *ParkingLotService) EnterParking(car *domain.Car) {
+	fmt.Printf("Car %d attempting to enter\n", car.ID)
+	ps.spotAvailable.L.Lock()
+	defer ps.spotAvailable.L.Unlock()
+
+	if ps.ParkingLot.IsFull() {
+		ps.queueMutex.Lock()
+		ps.entryQueue = append(ps.entryQueue, car)
+		ps.queueMutex.Unlock()
+		fmt.Printf("Parking lot full. Car %d waiting.\n", car.ID)
+		ps.notifyObservers(UpdateInfo{Car: car, Entering: true, Spot: -1, EventType: "CarWaiting"})
+		go ps.handleEntryTimeout(car)
+		ps.waitForSpot(car)
+	} else {
+		ps.assignSpotAndEnter(car)
+	}
+}
+
+func (ps *ParkingLotService) assignSpotAndEnter(car *domain.Car) {
+	spot := ps.ParkingLot.FindAvailableSpot()
+	if spot == -1 {
+		fmt.Printf("Error: No spot could be assigned to %d\n", car.ID)
+		return
+	}
+	ps.ParkingLot.ParkCar(car, spot)
+	car.State = "Parked"
+	fmt.Printf("Car %d parked at spot %d\n", car.ID, spot)
+	ps.notifyObservers(UpdateInfo{Car: car, Entering: true, Spot: spot, EventType: "CarParked"})
+	go ps.scheduleExit(car)
+}
+
+func (ps *ParkingLotService) ExitParking(car *domain.Car) {
+	ps.spotAvailable.L.Lock()
+	defer ps.spotAvailable.L.Unlock()
+
+	if !ps.ParkingLot.IsCarParked(car) {
+		fmt.Printf("Vehicle %d can't exit: Invalid spot.\n", car.ID)
+		return
+	}
+
+	ps.ParkingLot.RemoveCar(car)
+	car.State = "Exiting"
+	ps.notifyObservers(UpdateInfo{Car: car, Entering: false, Spot: -1, EventType: "CarExiting"})
+	ps.spotAvailable.Broadcast()
+}
+
+func (ps *ParkingLotService) GetEntryChannel() chan<- *domain.Car {
+	fmt.Printf("Car %d entering parking logic\n")
+	return ps.entryChannel
+}
+
+func (ps *ParkingLotService) GetExitChannel() chan *domain.Car {
+	return ps.exitChannel
+}
+
+func (ps *ParkingLotService) scheduleExit(car *domain.Car) {
+	time.Sleep(time.Duration(rand.Intn(10)) * time.Second)
+	ps.exitChannel <- car
+}
+
+func (ps *ParkingLotService) waitForSpot(car *domain.Car) {
+	fmt.Printf("Car %d waiting for a spot\n", car.ID)
 	for {
 		ps.spotAvailable.L.Lock()
-		spotIndex := ps.findAvailableSpot()
-		ps.spotAvailable.L.Unlock()
-
-		if spotIndex != -1 {
-			ps.queueMutex.Lock()
-			ps.removeFromQueue(vehicle)
-			ps.queueMutex.Unlock()
-
-			ps.assignSpotAndEnter(vehicle)
+		if !ps.isCarInQueue(car) {
+			ps.spotAvailable.L.Unlock()
 			return
 		}
-
-		ps.spotAvailable.L.Lock()
+		if !ps.ParkingLot.IsFull() {
+			ps.assignSpotAndEnter(car)
+			ps.spotAvailable.L.Unlock()
+			return
+		}
 		ps.spotAvailable.Wait()
 		ps.spotAvailable.L.Unlock()
-
-		ps.queueMutex.Lock()
-		inQueue := ps.vehicleInQueue(vehicle)
-		ps.queueMutex.Unlock()
-
-		if !inQueue {
-			return
-		}
 	}
 }
 
-func (ps *ParkingService) handleEntryTimeout(vehicle domain.Car) {
-	timeout := time.After(10 * time.Second)
+func (ps *ParkingLotService) handleEntryTimeout(car *domain.Car) {
+	timer := time.NewTimer(ps.timeoutDuration)
 	select {
-	case <-ps.tryEnterWithTimeout(vehicle):
-	case <-timeout:
+	case <-timer.C:
 		ps.spotAvailable.L.Lock()
-		ps.queueMutex.Lock()
-		ps.removeFromQueue(vehicle)
-		ps.queueMutex.Unlock()
-
-		vehicle.State = "Timeout"
-		ps.UpdateChannel <- UpdateInfo{Car: vehicle, Entering: false, Spot: -1}
+		ps.removeFromQueue(car)
+		car.State = "Timeout"
+		ps.notifyObservers(UpdateInfo{Car: car, Entering: false, Spot: -1, EventType: "CarTimeout"})
 		ps.spotAvailable.L.Unlock()
+		fmt.Printf("Car %d timed out after %v. Exiting.\n", car.ID, ps.timeoutDuration)
 
-		fmt.Printf("Carro %d timeout después de 10 segundos. Saliendo.\n", vehicle.ID)
-	}
-}
-
-func (ps *ParkingService) tryEnterWithTimeout(vehicle domain.Car) chan struct{} {
-	entered := make(chan struct{})
-	go func() {
+	case <-car.Cancel:
+		timer.Stop()
 		ps.spotAvailable.L.Lock()
-		defer ps.spotAvailable.L.Unlock()
-
-		if !ps.vehicleInQueue(vehicle) {
-			return
-		}
-
-		if spotIndex := ps.findAvailableSpot(); spotIndex != -1 {
-			ps.assignSpotAndEnter(vehicle)
-			close(entered)
-		}
-	}()
-	return entered
-}
-
-func (ps *ParkingService) assignSpotAndEnter(vehicle domain.Car) {
-	vehicle.Spot = ps.findAvailableSpot()
-	if vehicle.Spot == -1 {
-		fmt.Printf("Error: No se pudo asignar un lugar a %d\n", vehicle.ID)
-		return
+		ps.removeFromQueue(car)
+		car.State = "Cancelled"
+		ps.notifyObservers(UpdateInfo{Car: car, Entering: false, Spot: -1, EventType: "CarCancelled"})
+		ps.spotAvailable.L.Unlock()
+		fmt.Printf("Car %d cancelled waiting. Exiting.\n", car.ID)
 	}
-
-	ps.Parking.Vehicles++
-	vehicle.State = "Estacionamiento"
-	ps.UpdateChannel <- UpdateInfo{Car: vehicle, Entering: true, Spot: vehicle.Spot}
-	go ps.scheduleExit(vehicle)
 }
 
-func (ps *ParkingService) scheduleExit(vehicle domain.Car) {
-	sleepDuration := time.Duration(rand.Intn(10)) * time.Second
-	time.Sleep(sleepDuration)
-	ps.ExitChannel <- vehicle
-}
-
-func (ps *ParkingService) ExitParking(vehicle domain.Car) {
-	ps.spotAvailable.L.Lock()
-	defer ps.spotAvailable.L.Unlock()
-
-	if vehicle.Spot < 0 || vehicle.Spot >= ps.Parking.Capacity {
-		fmt.Printf("El vehículo %d no puede salir: Lugar no válido.\n", vehicle.ID)
-		return
-	}
-
-	ps.Parking.Vehicles--
-	vehicle.State = "Exiting"
-	ps.UpdateChannel <- UpdateInfo{Car: vehicle, Entering: false, Spot: -1}
-	ps.freeSpot(vehicle.Spot)
-	ps.spotAvailable.Signal()
-}
-
-func (ps *ParkingService) removeFromQueue(vehicle domain.Car) {
-	for i, v := range ps.entryQueue {
-		if v.ID == vehicle.ID {
+func (ps *ParkingLotService) removeFromQueue(car *domain.Car) {
+	ps.queueMutex.Lock()
+	defer ps.queueMutex.Unlock()
+	for i, c := range ps.entryQueue {
+		if c.ID == car.ID {
 			ps.entryQueue = append(ps.entryQueue[:i], ps.entryQueue[i+1:]...)
 			return
 		}
 	}
 }
 
-func (ps *ParkingService) vehicleInQueue(vehicle domain.Car) bool {
-	for _, v := range ps.entryQueue {
-		if v.ID == vehicle.ID {
+func (ps *ParkingLotService) isCarInQueue(car *domain.Car) bool {
+	ps.queueMutex.Lock()
+	defer ps.queueMutex.Unlock()
+	for _, c := range ps.entryQueue {
+		if c.ID == car.ID {
 			return true
 		}
 	}
 	return false
 }
 
-func (ps *ParkingService) findAvailableSpot() int {
-	for i := 0; i < ps.Parking.Capacity; i++ {
-		if ps.Parking.Spots[i] == 0 {
-			ps.Parking.Spots[i] = 1
-			return i
-		}
+func NewParkingService(parkingSize int) *ParkingLotService {
+	ps := &ParkingLotService{
+		entryChannel: make(chan *domain.Car, parkingSize),
+		exitChannel:  make(chan *domain.Car, parkingSize),
 	}
-	return -1
+	go ps.handleCarEntry()
+	go ps.handleCarExit()
+	return ps
 }
 
-func (ps *ParkingService) freeSpot(spotIndex int) {
-	if spotIndex >= 0 && spotIndex < ps.Parking.Capacity {
-		ps.Parking.Spots[spotIndex] = 0
+func (ps *ParkingLotService) handleCarEntry() {
+	fmt.Println("handleCarEntry started")
+	for car := range ps.entryChannel {
+		fmt.Printf("handleCarEntry received car %d\n", car.ID)
+		ps.EnterParking(car)
+		fmt.Printf("handleCarEntry processed car %d\n", car.ID)
+	}
+	fmt.Println("handleCarEntry finished")
+}
+
+func (ps *ParkingLotService) handleCarExit() {
+	for car := range ps.exitChannel {
+		ps.ExitParking(car)
 	}
 }
