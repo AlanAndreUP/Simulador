@@ -21,7 +21,5 @@ func main() {
 	}
 
 	go infrastructure.StartParkingControl(parkingLotService, numVehicles)
-	//go infrastructure.GenerateVehicles(parkingService.GetEntryChannel(), numVehicles)
-
 	ui.StartUI(parkingLotService)
 }

@@ -76,7 +76,7 @@ func (ps *ParkingLotService) notifyObservers(info UpdateInfo) {
 }
 
 func (ps *ParkingLotService) EnterParking(car *domain.Car) {
-	fmt.Printf("Car %d attempting to enter\n", car.ID)
+	fmt.Printf("Car %d intentando  entrar\n", car.ID)
 	ps.spotAvailable.L.Lock()
 	defer ps.spotAvailable.L.Unlock()
 
@@ -84,7 +84,7 @@ func (ps *ParkingLotService) EnterParking(car *domain.Car) {
 		ps.queueMutex.Lock()
 		ps.entryQueue = append(ps.entryQueue, car)
 		ps.queueMutex.Unlock()
-		fmt.Printf("Parking lot full. Car %d waiting.\n", car.ID)
+		fmt.Printf("Parking lleno. Carro %d Esperando.\n", car.ID)
 		ps.notifyObservers(UpdateInfo{Car: car, Entering: true, Spot: -1, EventType: "CarWaiting"})
 		go ps.handleEntryTimeout(car)
 		ps.waitForSpot(car)
@@ -96,12 +96,12 @@ func (ps *ParkingLotService) EnterParking(car *domain.Car) {
 func (ps *ParkingLotService) assignSpotAndEnter(car *domain.Car) {
 	spot := ps.ParkingLot.FindAvailableSpot()
 	if spot == -1 {
-		fmt.Printf("Error: No spot could be assigned to %d\n", car.ID)
+		fmt.Printf("Error: No hay lugar que se pueda asignar  %d\n", car.ID)
 		return
 	}
 	ps.ParkingLot.ParkCar(car, spot)
 	car.State = "Parked"
-	fmt.Printf("Car %d parked at spot %d\n", car.ID, spot)
+	fmt.Printf("Carro %d Parkeado en el lugar %d\n", car.ID, spot)
 	ps.notifyObservers(UpdateInfo{Car: car, Entering: true, Spot: spot, EventType: "CarParked"})
 	go ps.scheduleExit(car)
 }
@@ -111,7 +111,7 @@ func (ps *ParkingLotService) ExitParking(car *domain.Car) {
 	defer ps.spotAvailable.L.Unlock()
 
 	if !ps.ParkingLot.IsCarParked(car) {
-		fmt.Printf("Vehicle %d can't exit: Invalid spot.\n", car.ID)
+		fmt.Printf("Vehicle %d no puede salir: Lugar Invalido.\n", car.ID)
 		return
 	}
 
@@ -122,7 +122,7 @@ func (ps *ParkingLotService) ExitParking(car *domain.Car) {
 }
 
 func (ps *ParkingLotService) GetEntryChannel() chan<- *domain.Car {
-	fmt.Printf("Car %d entering parking logic\n")
+	fmt.Printf("Carro %d entrando al  parking \n")
 	return ps.entryChannel
 }
 
@@ -136,7 +136,7 @@ func (ps *ParkingLotService) scheduleExit(car *domain.Car) {
 }
 
 func (ps *ParkingLotService) waitForSpot(car *domain.Car) {
-	fmt.Printf("Car %d waiting for a spot\n", car.ID)
+	fmt.Printf("Car %d Esperando por un lugar \n", car.ID)
 	for {
 		ps.spotAvailable.L.Lock()
 		if !ps.isCarInQueue(car) {
@@ -162,7 +162,7 @@ func (ps *ParkingLotService) handleEntryTimeout(car *domain.Car) {
 		car.State = "Timeout"
 		ps.notifyObservers(UpdateInfo{Car: car, Entering: false, Spot: -1, EventType: "CarTimeout"})
 		ps.spotAvailable.L.Unlock()
-		fmt.Printf("Car %d timed out after %v. Exiting.\n", car.ID, ps.timeoutDuration)
+		fmt.Printf("Car %d se acabo el tiempo de espera %v. saliendo.\n", car.ID, ps.timeoutDuration)
 
 	case <-car.Cancel:
 		timer.Stop()
@@ -171,7 +171,7 @@ func (ps *ParkingLotService) handleEntryTimeout(car *domain.Car) {
 		car.State = "Cancelled"
 		ps.notifyObservers(UpdateInfo{Car: car, Entering: false, Spot: -1, EventType: "CarCancelled"})
 		ps.spotAvailable.L.Unlock()
-		fmt.Printf("Car %d cancelled waiting. Exiting.\n", car.ID)
+		fmt.Printf("Car %d se cancela la espera . Saliendo.\n", car.ID)
 	}
 }
 
@@ -208,13 +208,12 @@ func NewParkingService(parkingSize int) *ParkingLotService {
 }
 
 func (ps *ParkingLotService) handleCarEntry() {
-	fmt.Println("handleCarEntry started")
 	for car := range ps.entryChannel {
-		fmt.Printf("handleCarEntry received car %d\n", car.ID)
+
 		ps.EnterParking(car)
-		fmt.Printf("handleCarEntry processed car %d\n", car.ID)
+
 	}
-	fmt.Println("handleCarEntry finished")
+
 }
 
 func (ps *ParkingLotService) handleCarExit() {

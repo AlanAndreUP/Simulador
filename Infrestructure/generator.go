@@ -30,7 +30,7 @@ func StartParkingControl(service *application.ParkingLotService, numVehicles int
 			fmt.Printf("Generando vehículo %d\n", car.ID)
 			time.Sleep(time.Duration(rand.Intn(3)+3) * time.Second)
 			service.EnterParking(&car)
-			fmt.Printf("Vehicle %d entered parking lot.\n", car.ID)
+			fmt.Printf("Vehicle %d Entrando al lugar del parking.\n", car.ID)
 			wg.Add(1)
 		}
 
@@ -43,12 +43,12 @@ func StartParkingControl(service *application.ParkingLotService, numVehicles int
 			go func(v *domain.Car) {
 				service.ExitParking(v)
 				time.Sleep(time.Duration(rand.Intn(3)+3) * time.Second)
-				fmt.Printf("Vehicle %d exited parking lot.\n", v.ID)
+				fmt.Printf("Vehicle %d Saliendo del  parking.\n", v.ID)
 				wg.Done()
 			}(vehicle)
 		}
 	}()
 
 	wg.Wait()
-	fmt.Println("All vehicles have exited.")
+	fmt.Println("Todos los  vehicles han  salido .")
 }

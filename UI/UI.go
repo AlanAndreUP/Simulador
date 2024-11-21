@@ -57,12 +57,10 @@ type ParkingUI struct {
 	spotMutex     sync.RWMutex
 }
 
-// Update implements parking.Observer.
 func (ui *ParkingUI) Update(info application.UpdateInfo) {
 	ui.updateChannel <- info
 }
 
-// createCarWithContainer creates a container with a car image
 func createCarWithContainer(filePath string) (*fyne.Container, *canvas.Image, error) {
 	carImg := canvas.NewImageFromFile(filePath)
 	carImg.FillMode = canvas.ImageFillOriginal
@@ -74,7 +72,6 @@ func createCarWithContainer(filePath string) (*fyne.Container, *canvas.Image, er
 	return carContainer, carImg, nil
 }
 
-// createGradientDoor creates a door with a gradient and label
 func createGradientDoor(isEntry bool) *fyne.Container {
 	doorColor := theme.PrimaryColor()
 	if !isEntry {
@@ -99,7 +96,6 @@ func createGradientDoor(isEntry bool) *fyne.Container {
 	return door
 }
 
-// NewParkingUI initializes the parking lot UI
 func NewParkingUI(service *application.ParkingLotService) *ParkingUI {
 	a := app.New()
 	w := a.NewWindow("Parking System")
@@ -110,14 +106,13 @@ func NewParkingUI(service *application.ParkingLotService) *ParkingUI {
 		window:        w,
 		container:     container.NewWithoutLayout(),
 		driveLanes:    make([]PathPoint, 0),
-		updateChannel: make(chan application.UpdateInfo, 100), // Buffered channel
+		updateChannel: make(chan application.UpdateInfo, 100),
 	}
 
 	ui.initializeUI()
 	return ui
 }
 
-// initializeUI sets up the user interface components
 func (ui *ParkingUI) initializeUI() {
 	ui.background = canvas.NewRectangle(theme.BackgroundColor())
 	ui.container.Add(ui.background)
@@ -132,7 +127,6 @@ func (ui *ParkingUI) initializeUI() {
 	ui.container.Add(ui.entryDoor)
 }
 
-// setupParkingSpots initializes parking spots
 func (ui *ParkingUI) setupParkingSpots() {
 	for i := 0; i < gridSize; i++ {
 		row := i / gridCols
@@ -162,18 +156,14 @@ func (ui *ParkingUI) setupParkingSpots() {
 	}
 }
 
-// createHeader creates the header for the parking system
 func (ui *ParkingUI) createHeader() *fyne.Container {
-	// Crear el label para el encabezado
 	headerLabel := widget.NewLabel("Sistema de Estacionamiento")
 	headerLabel.TextStyle = fyne.TextStyle{Bold: true}
 	headerLabel.Alignment = fyne.TextAlignCenter
 
-	// Crear el label de estado para el encabezado
 	ui.statusLabel = widget.NewLabel("Estado: 0/20 espacios ocupados")
 	ui.statusLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	// Crear un contenedor con el encabezado y el label de estado
 	headerContainer := container.NewVBox(
 		headerLabel,
 		ui.statusLabel,
@@ -182,7 +172,6 @@ func (ui *ParkingUI) createHeader() *fyne.Container {
 	return headerContainer
 }
 
-// getOccupiedSpaces counts the number of occupied parking spots
 func (ui *ParkingUI) getOccupiedSpaces() int {
 	occupied := 0
 	for i := 0; i < gridSize; i++ {
@@ -193,7 +182,6 @@ func (ui *ParkingUI) getOccupiedSpaces() int {
 	return occupied
 }
 
-// createDriveLanes creates points for driving lanes
 func (ui *ParkingUI) createDriveLanes() {
 	startX := marginLeft/2 + doorWidth
 	endX := marginLeft + cellSize*gridCols
@@ -209,7 +197,6 @@ func (ui *ParkingUI) createDriveLanes() {
 	}
 }
 
-// drawDriveLanes draws the driving lanes on the UI
 func (ui *ParkingUI) drawDriveLanes() {
 	laneColor := theme.DisabledButtonColor()
 	mainLane := canvas.NewRectangle(laneColor)
@@ -230,7 +217,6 @@ func (ui *ParkingUI) drawDriveLanes() {
 	}
 }
 
-// calculatePath determines the path for car movement
 func (ui *ParkingUI) calculatePath(from, to fyne.Position) []PathPoint {
 	path := make([]PathPoint, 0)
 	path = append(path, PathPoint{from.X, from.Y})
@@ -255,14 +241,12 @@ func (ui *ParkingUI) calculatePath(from, to fyne.Position) []PathPoint {
 	return path
 }
 
-// StartUI launches the parking lot user interface
 func StartUI(service *application.ParkingLotService) {
 	parkingUI := NewParkingUI(service)
 	if parkingUI == nil {
 		return
 	}
 
-	// Registrar la UI como observador
 	service.RegisterObserver(parkingUI)
 
 	header := parkingUI.createHeader()
@@ -276,14 +260,13 @@ func StartUI(service *application.ParkingLotService) {
 	parkingUI.window.ShowAndRun()
 }
 
-// processUpdates handles car park updates concurrently
 func (ui *ParkingUI) processUpdates() {
 	for update := range ui.updateChannel {
+		fmt.Println("Espera")
 		ui.safeUpdate(update)
 	}
 }
 
-// safeUpdate ensures thread-safe updates to the UI
 func (ui *ParkingUI) safeUpdate(info application.UpdateInfo) {
 	ui.spotMutex.Lock()
 	defer ui.spotMutex.Unlock()
@@ -296,8 +279,6 @@ func (ui *ParkingUI) safeUpdate(info application.UpdateInfo) {
 	}
 }
 
-// Ajustes en parkCar y removeCar para resolver problemas de contenedores
-// parkCar handles car parking logic
 func (ui *ParkingUI) parkCar(info application.UpdateInfo) {
 	spot := ui.findAvailableSpot()
 	if spot == nil {
@@ -310,18 +291,13 @@ func (ui *ParkingUI) parkCar(info application.UpdateInfo) {
 	spot.carContainer = carContainer
 	spot.carImage = carImage
 
-	// Actualiza el color del spot para indicar ocupación
 	spot.rect.FillColor = theme.PrimaryColor()
 	spot.occupied = true
 
-	// Mueve el auto al lugar correcto
 	carContainer.Move(spot.position)
-
-	// Agrega el auto al contenedor principal
 	ui.container.Add(carContainer)
 	ui.window.Content().Refresh()
 
-	// Actualiza el estado del sistema
 	ui.updateStatusLabel()
 	spot.carContainer.Show()
 }
@@ -345,14 +321,12 @@ func (ui *ParkingUI) removeCar(info application.UpdateInfo) {
 	ui.container.Refresh()
 }
 
-// Siempre mantener statusLabel visible
 func (ui *ParkingUI) updateStatusLabel() {
 	occupiedSpaces := ui.getOccupiedSpaces()
 	ui.statusLabel.SetText(fmt.Sprintf("Estado: %d/%d espacios ocupados", occupiedSpaces, gridSize))
-	ui.window.Content().Refresh() // Asegurar refresco visual
+	ui.window.Content().Refresh()
 }
 
-// findAvailableSpot finds the first unoccupied parking spot
 func (ui *ParkingUI) findAvailableSpot() *ParkingSpot {
 	for i := range ui.spots {
 		if !ui.spots[i].occupied {
